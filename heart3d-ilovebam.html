@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>I LOVE BAM 💕 — Heart 3D</title>
+<style>
+  html,body{
+    margin:0;padding:0;
+    width:100%;height:100%;
+    background:#05030a;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    overflow:hidden;
+    font-family:sans-serif;
+  }
+  canvas{
+    display:block;
+    touch-action:none;
+  }
+  .caption{
+    color:#ffa8d6;
+    opacity:0.6;
+    font-size:0.8rem;
+    margin-top:10px;
+    letter-spacing:1px;
+    text-align:center;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<p class="caption">หัวใจ 3 มิติที่หมุนได้ ทำจากคำว่า "I LOVE BAM" 💕<br>ลากนิ้ว/เมาส์เพื่อหมุน • บีบนิ้วสองนิ้ว/เลื่อนเมาส์ scroll เพื่อซูม</p>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function resize(){
+  const size = Math.min(window.innerWidth, window.innerHeight * 0.85, 520);
+  canvas.width = size;
+  canvas.height = size;
+}
+resize();
+window.addEventListener('resize', resize);
+
+/* ---------- build the 3D point cloud once ---------- */
+const TEXT = "I LOVE BAM ";
+const REPEATS = 10;                 // how many times the phrase wraps around the heart
+const U_STEPS = TEXT.length * REPEATS;
+const V_STEPS = 8;                  // tube "roundness" (cross-section resolution)
+const TUBE_R = 2.3;                 // tube thickness
+
+function heart2D(t){
+  const x = 16 * Math.pow(Math.sin(t), 3);
+  const y = 13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t);
+  return { x, y };
+}
+
+const points = []; // {ox, oy, oz, char}
+for(let i=0; i<U_STEPS; i++){
+  const t = (i / U_STEPS) * Math.PI * 2;
+  const dt = 0.001;
+  const p0 = heart2D(t);
+  const p1 = heart2D(t + dt);
+  // tangent (in xy plane)
+  let tx = p1.x - p0.x, ty = p1.y - p0.y;
+  const tlen = Math.hypot(tx, ty) || 1;
+  tx /= tlen; ty /= tlen;
+  // in-plane normal (perpendicular to tangent, still in xy plane)
+  const nx = -ty, ny = tx;
+  // binormal is simply the Z axis since the base curve is planar
+  const char = TEXT[i % TEXT.length];
+
+  for(let j=0; j<V_STEPS; j++){
+    const v = (j / V_STEPS) * Math.PI * 2;
+    const cosV = Math.cos(v), sinV = Math.sin(v);
+    const ox = p0.x + TUBE_R * (cosV * nx);
+    const oy = p0.y + TUBE_R * (cosV * ny);
+    const oz = TUBE_R * sinV;
+    points.push({ ox, oy, oz, char });
+  }
+}
+
+/* ---------- interaction (drag to spin, pinch/wheel to zoom) ---------- */
+let angleY = 0;
+let angleX = 0.15;
+let autoSpin = true;
+let dragging = false;
+let lastX = 0, lastY = 0;
+let zoom = 1;
+let pinchStartDist = null;
+
+function pointerDown(x, y){ dragging = true; autoSpin = false; lastX = x; lastY = y; }
+function pointerMove(x, y){
+  if(!dragging) return;
+  angleY += (x - lastX) * 0.008;
+  angleX += (y - lastY) * 0.008;
+  lastX = x; lastY = y;
+}
+function pointerUp(){ dragging = false; }
+function touchDist(touches){
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+canvas.addEventListener('mousedown', e => pointerDown(e.clientX, e.clientY));
+canvas.addEventListener('mousemove', e => pointerMove(e.clientX, e.clientY));
+window.addEventListener('mouseup', pointerUp);
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoom = Math.min(2.5, Math.max(0.4, zoom - e.deltaY * 0.0015));
+}, { passive:false });
+
+canvas.addEventListener('touchstart', e => {
+  autoSpin = false;
+  if(e.touches.length === 2){
+    dragging = false;
+    pinchStartDist = touchDist(e.touches);
+  } else {
+    const t = e.touches[0];
+    pointerDown(t.clientX, t.clientY);
+  }
+}, { passive:true });
+
+canvas.addEventListener('touchmove', e => {
+  if(e.touches.length === 2){
+    const newDist = touchDist(e.touches);
+    if(pinchStartDist){
+      const ratio = newDist / pinchStartDist;
+      zoom = Math.min(2.5, Math.max(0.4, zoom * ratio));
+    }
+    pinchStartDist = newDist;
+  } else if(e.touches.length === 1){
+    const t = e.touches[0];
+    pointerMove(t.clientX, t.clientY);
+  }
+}, { passive:true });
+
+window.addEventListener('touchend', e => {
+  if(e.touches.length < 2) pinchStartDist = null;
+  if(e.touches.length === 0) pointerUp();
+});
+
+/* ---------- render loop ---------- */
+const CAM_DIST = 50;
+
+function render(){
+  if(autoSpin) angleY += 0.012;
+
+  const cosY = Math.cos(angleY), sinY = Math.sin(angleY);
+  const cosX = Math.cos(angleX), sinX = Math.sin(angleX);
+
+  const projScale = (canvas.width / 42) * zoom;
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const fontBase = canvas.width / 38;
+
+  const projected = [];
+  for(const p of points){
+    // rotate around Y axis
+    let x = p.ox * cosY + p.oz * sinY;
+    let z = -p.ox * sinY + p.oz * cosY;
+    let y = p.oy;
+    // rotate around X axis (tilt)
+    let y2 = y * cosX - z * sinX;
+    let z2 = y * sinX + z * cosX;
+
+    const factor = CAM_DIST / (CAM_DIST - z2);
+    const sx = cx + x * factor * (projScale / CAM_DIST) * CAM_DIST / 16;
+    const sy = cy - y2 * factor * (projScale / CAM_DIST) * CAM_DIST / 16;
+
+    projected.push({ sx, sy, z: z2, factor, char: p.char });
+  }
+
+  projected.sort((a, b) => a.z - b.z); // far to near (painter's algorithm)
+
+  ctx.fillStyle = '#05030a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const zVals = projected.map(p => p.z);
+  const zMin = Math.min(...zVals), zMax = Math.max(...zVals);
+
+  for(const p of projected){
+    const depthT = (p.z - zMin) / (zMax - zMin || 1); // 0 = far, 1 = near
+    const size = fontBase * (0.55 + depthT * 0.75);
+    ctx.font = `bold ${size}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // pink shading: deep magenta (far) -> bright hot pink (near)
+    const r = Math.round(120 + depthT * 135);
+    const g = Math.round(20 + depthT * 90);
+    const b = Math.round(90 + depthT * 110);
+    const alpha = 0.35 + depthT * 0.65;
+    ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+    ctx.fillText(p.char, p.sx, p.sy);
+  }
+
+  requestAnimationFrame(render);
+}
+render();
+</script>
+</body>
+</html>
